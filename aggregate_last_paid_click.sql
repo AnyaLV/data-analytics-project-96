@@ -1,106 +1,82 @@
-with visitors_pay as (
+with visitors_with_leads as (
     select
-        ses.visitor_id,
-        ses.visit_date,
-        ses.source as utm_source,
-        ses.medium as utm_medium,
-        ses.campaign as utm_campaign,
+        s.visitor_id,
+        s.visit_date,
         l.lead_id,
-        l.amount,
         l.created_at,
+        l.amount,
         l.closing_reason,
         l.status_id,
-        row_number()
-            over (partition by ses.visitor_id order by ses.visit_date desc)
-        as rn
-    from sessions as ses
+        s.medium as utm_medium,
+        s.campaign as utm_campaign,
+        lower(s.source) as utm_source,
+        row_number() over (
+            partition by s.visitor_id
+            order by s.visit_date desc
+        ) as rn
+    from sessions as s
     left join leads as l
         on
-            ses.visitor_id = l.visitor_id
-            and ses.visit_date <= l.created_at
-    where ses.medium != 'organic'
+            s.visitor_id = l.visitor_id
+            and s.visit_date <= l.created_at
+    where s.medium != 'organic'
 ),
 
-total_visitors as (
+aggregated_data as (
     select
         utm_source,
         utm_medium,
         utm_campaign,
-        visit_date::date as visit_date,
+        date(visit_date) as visit_date,
         count(visitor_id) as visitors_count,
         count(
             case
-                when created_at is not null
-                    then visitor_id
+                when created_at is not null then visitor_id
             end
         ) as leads_count,
-        count(case
-            when status_id = 142
-                then visitor_id
-        end) as purchases_count,
-        sum(case
-            when status_id = 142
-                then amount
-        end) as revenue
-    from visitors_pay
+        count(case when status_id = 142 then visitor_id end) as purchases_count,
+        sum(case when status_id = 142 then amount end) as revenue
+    from visitors_with_leads
     where rn = 1
-    group by
-        utm_source,
-        utm_medium,
-        utm_campaign,
-        visit_date::date
-    order by revenue desc nulls last
+    group by 1, 2, 3, 4
 ),
 
-costs_marketing as (
+marketing_data as (
     select
-        campaign_date::date as visit_date,
+        date(campaign_date) as visit_date,
         utm_source,
         utm_medium,
         utm_campaign,
         sum(daily_spent) as total_cost
     from ya_ads
-    group by
-        campaign_date,
-        utm_source,
-        utm_medium,
-        utm_campaign
+    group by 1, 2, 3, 4
     union all
     select
-        campaign_date::date as visit_date,
+        date(campaign_date) as visit_date,
         utm_source,
         utm_medium,
         utm_campaign,
         sum(daily_spent) as total_cost
     from vk_ads
-    group by
-        campaign_date,
-        utm_source,
-        utm_medium,
-        utm_campaign
+    group by 1, 2, 3, 4
 )
 
 select
-    tv.visit_date,
-    tv.utm_source,
-    tv.utm_medium,
-    tv.utm_campaign,
-    visitors_count,
-    total_cost,
-    leads_count,
-    purchases_count,
-    revenue
-from total_visitors as tv
-left join costs_marketing as cm
+    a.visit_date,
+    a.visitors_count,
+    a.utm_source,
+    a.utm_medium,
+    a.utm_campaign,
+    m.total_cost,
+    a.leads_count,
+    a.purchases_count,
+    a.revenue
+from aggregated_data as a
+left join marketing_data as m
     on
-        tv.visit_date = cm.visit_date
-        and tv.utm_source = cm.utm_source
-        and tv.utm_medium = cm.utm_medium
-        and tv.utm_campaign = cm.utm_campaign
-order by
-    revenue desc nulls last,
-    visit_date asc,
-    visitors_count desc,
-    utm_source asc,
-    utm_medium asc,
-    utm_campaign asc
+        a.visit_date = m.visit_date
+        and a.utm_source = m.utm_source
+        and a.utm_medium = m.utm_medium
+        and a.utm_campaign = m.utm_campaign
+order by 9 desc nulls last, 1, 2 desc, 3, 4
+limit 15
